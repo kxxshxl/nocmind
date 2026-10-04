@@ -1,0 +1,132 @@
+# NOCMind local stack. Secrets and overrides come from ./.env (see .env.example).
+# GPU acceleration for the local LLM: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+name: nocmind
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  db:
+    <<: *restart
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: nocmind
+      POSTGRES_USER: nocmind
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nocmind}
+    ports: ['127.0.0.1:5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nocmind -d nocmind']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy: {resources: {limits: {memory: 1g}}}
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ['redis-server', '--maxmemory', '128mb', '--maxmemory-policy', 'allkeys-lru']
+    ports: ['127.0.0.1:6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy: {resources: {limits: {memory: 256m}}}
+
+  ollama:
+    <<: *restart
+    image: ollama/ollama:0.35.1
+    ports: ['127.0.0.1:11434:11434']
+    volumes: ['ollama:/root/.ollama']
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: make sure the configured local model is present (no-op when already pulled).
+  ollama-pull:
+    image: ollama/ollama:0.35.1
+    depends_on:
+      ollama: {condition: service_healthy}
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ['ollama', 'pull', '${OLLAMA_MODEL:-qwen3:4b-instruct}']
+    restart: 'no'
+
+  backend:
+    <<: *restart
+    build: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://nocmind:${POSTGRES_PASSWORD:-nocmind}@db:5432/nocmind
+      REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      EVAL_JUDGE_PROVIDER: ${EVAL_JUDGE_PROVIDER:-ollama}
+      JWT_SECRET: ${JWT_SECRET:-}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-nocmind-admin}
+      DEMO_OPERATOR_PASSWORD: ${DEMO_OPERATOR_PASSWORD:-}
+      DEMO_VIEWER_PASSWORD: ${DEMO_VIEWER_PASSWORD:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: '0'
+      MLFLOW_HTTP_REQUEST_TIMEOUT: '5'
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      ollama-pull: {condition: service_completed_successfully}
+    ports: ['8000:8000']
+    deploy: {resources: {limits: {memory: 4g}}}
+
+  frontend:
+    <<: *restart
+    build: {context: ./frontend}
+    depends_on:
+      backend: {condition: service_healthy}
+    ports: ['5173:80']
+    deploy: {resources: {limits: {memory: 128m}}}
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.15.0
+    ports: ['127.0.0.1:9090:9090']
+    volumes: ['./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro']
+    depends_on: [backend]
+    deploy: {resources: {limits: {memory: 512m}}}
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:13.2.3
+    ports: ['127.0.0.1:3000:3000']
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/nocmind-dashboard.json
+    depends_on: [prometheus]
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/nocmind-dashboard.json:/var/lib/grafana/dashboards/nocmind-dashboard.json:ro
+    deploy: {resources: {limits: {memory: 512m}}}
+
+  mlflow:
+    <<: *restart
+    image: ghcr.io/mlflow/mlflow:v3.16.1
+    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --allowed-hosts '*'
+    ports: ['127.0.0.1:5000:5000']
+    volumes: ['mlflow:/mlflow']
+    deploy: {resources: {limits: {memory: 2g}}}
+
+volumes:
+  pgdata:
+  ollama:
+  mlflow:

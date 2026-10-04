@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+node_modules/
+dist/
+backend/nocmind.db
+backend/*.db
+.pytest_cache/
+.mlruns/
+mlruns/
+*.tsbuildinfo
+.ruff_cache/
+.mypy_cache/
+*.env
+!.env.example

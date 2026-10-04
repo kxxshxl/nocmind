@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: nocmind-frontend}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: nocmind-frontend}}
+  template:
+    metadata: {labels: {app: nocmind-frontend}}
+    spec:
+      containers:
+        - name: frontend
+          image: nocmind/frontend:latest
+          ports: [{containerPort: 80}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: nocmind-frontend}
+spec:
+  selector: {app: nocmind-frontend}
+  type: NodePort
+  ports: [{port: 80, targetPort: 80, nodePort: 30080}]

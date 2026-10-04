@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: nocmind-postgres-pvc}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 5Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: nocmind-postgres}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: nocmind-postgres}}
+  template:
+    metadata: {labels: {app: nocmind-postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg17
+          ports: [{containerPort: 5432}]
+          env:
+            - {name: POSTGRES_DB, value: nocmind}
+            - {name: POSTGRES_USER, value: nocmind}
+            - {name: POSTGRES_PASSWORD, value: nocmind}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: nocmind-postgres-pvc}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres}
+spec:
+  selector: {app: nocmind-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
